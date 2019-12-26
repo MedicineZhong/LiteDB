@@ -47,7 +47,7 @@ namespace LiteDB.Engine
             if (collection.IsNullOrWhiteSpace()) throw new ArgumentNullException(nameof(collection));
             if (transform == null) throw new ArgumentNullException(nameof(transform));
 
-            return this.AutoTransaction((Func<TransactionService, int>)(transaction =>
+            return this.AutoTransaction(transaction =>
             {
                 return this.Update(collection, transformDocs());
 
@@ -62,7 +62,7 @@ namespace LiteDB.Engine
 
                     using (var reader = this.Query(collection, q))
                     {
-                        while(reader.Read())
+                        while (reader.Read())
                         {
                             var doc = reader.Current.AsDocument;
 
@@ -87,7 +87,7 @@ namespace LiteDB.Engine
                         }
                     }
                 }
-            }));
+            });
         }
 
         /// <summary>
@@ -123,7 +123,7 @@ namespace LiteDB.Engine
 
             foreach (var index in col.GetCollectionIndexes().Where(x => x.Name != "_id"))
             {
-                // getting all keys do check
+                // getting all keys from expression over document
                 var keys = index.BsonExpr.Execute(doc);
 
                 foreach (var key in keys)
@@ -131,6 +131,8 @@ namespace LiteDB.Engine
                     newKeys.Add(new Tuple<byte, BsonValue, string>(index.Slot, key, index.Name));
                 }
             }
+
+            if (oldKeys.Length == 0 && newKeys.Count == 0) return true;
 
             // get a list of all nodes that are in oldKeys but not in newKeys (must delete)
             var toDelete = new HashSet<PageAddress>(oldKeys
@@ -142,6 +144,9 @@ namespace LiteDB.Engine
                 .Where(x => oldKeys.Any(o => o.Item1 == x.Item1 && o.Item2 == x.Item2) == false)
                 .ToArray();
 
+            // if nothing to change, just exit
+            if (toDelete.Count == 0 && toInsert.Length == 0) return true;
+
             // delete nodes and return last keeped node in list
             var last = indexer.DeleteList(pkNode.Position, toDelete);
 
@@ -150,7 +155,7 @@ namespace LiteDB.Engine
             {
                 var index = col.GetCollectionIndex(elem.Item3);
 
-                last = indexer.AddNode(index, elem.Item2, pkNode.DataBlock, last);
+                last = indexer.AddNode(index, elem.Item2, pkNode.DataBlock, last, _flipCoin);
             }
 
             return true;

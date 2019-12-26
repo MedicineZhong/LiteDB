@@ -256,7 +256,9 @@ namespace LiteDB.Engine
         /// </summary>
         public BufferSlice Get(byte index)
         {
-            ENSURE(index < byte.MaxValue, "slot index must be between 0-254");
+            ENSURE(this.ItemsCount > 0, "should have items in this page");
+            ENSURE(this.HighestIndex != byte.MaxValue, "should be have at least 1 index in this page");
+            ENSURE(index <= this.HighestIndex, "get only index below highest index");
 
             // read slot address
             var positionAddr = CalcPositionAddr(index);
@@ -280,29 +282,39 @@ namespace LiteDB.Engine
         {
             index = this.GetFreeIndex();
 
-            return this.Insert(bytesLength, index, false);
+            return this.Insert(bytesLength, index);
         }
 
         /// <summary>
         /// Get a new page segment for this length content using fixed index
         /// </summary>
-        private BufferSlice Insert(ushort bytesLength, byte index, bool overwrite)
+        private BufferSlice Insert(ushort bytesLength, byte index)
         {
+            var isNewIndex = index > this.HighestIndex || this.HighestIndex == byte.MaxValue;
+
             ENSURE(_buffer.ShareCounter == BUFFER_WRITABLE, "page must be writable to support changes");
-            ENSURE(this.FreeBytes >= bytesLength + (overwrite ? 0 : SLOT_SIZE), "length must be always lower than current free space");
+            ENSURE(bytesLength > 0, "must insert more than 0 bytes");
+            ENSURE(this.FreeBytes >= bytesLength + (isNewIndex ? SLOT_SIZE : 0), "length must be always lower than current free space");
             ENSURE(index != byte.MaxValue, "index shloud be a valid number (0-254)");
             ENSURE(this.ItemsCount < byte.MaxValue, "page full");
-
-            // if index are bigger than HighestIndex, let's update this HighestIndex with my new index
-            if (index > this.HighestIndex || this.HighestIndex == byte.MaxValue) this.HighestIndex = index;
+            ENSURE(this.FreeBytes >= this.FragmentedBytes, "fragmented bytes must be at most free bytes");
 
             // calculate how many continuous bytes are avaiable in this page
-            var continuosBlocks = this.FreeBytes - this.FragmentedBytes;
+            var continuosBlocks = this.FreeBytes - this.FragmentedBytes - (isNewIndex ? SLOT_SIZE : 0);
+
+            ENSURE(continuosBlocks == PAGE_SIZE - this.NextFreePosition - this.FooterSize - (isNewIndex ? SLOT_SIZE : 0), "continuosBlock must be same as from NextFreePosition");
 
             // if continuous blocks are not big enouth for this data, must run page defrag
             if (bytesLength > continuosBlocks)
             {
                 this.Defrag();
+            }
+
+            // if index are bigger than HighestIndex, let's update this HighestIndex with my new index
+            if (isNewIndex)
+            {
+                ENSURE(index == (byte)(this.HighestIndex + 1), "new index must be next highest index");
+                this.HighestIndex = index;
             }
 
             // get segment addresses
@@ -328,6 +340,8 @@ namespace LiteDB.Engine
 
             this.IsDirty = true;
 
+            ENSURE(position + bytesLength <= (PAGE_SIZE - (this.HighestIndex + 1) * SLOT_SIZE), "new buffer slice could not override footer area");
+
             // create page segment based new inserted segment
             return _buffer.Slice(position, bytesLength);
         }
@@ -338,7 +352,6 @@ namespace LiteDB.Engine
         public void Delete(byte index)
         {
             ENSURE(_buffer.ShareCounter == BUFFER_WRITABLE, "page must be writable to support changes");
-            ENSURE(index < byte.MaxValue, "deleted index segment must be 0-254");
 
             // read block position on index slot
             var positionAddr = CalcPositionAddr(index);
@@ -358,7 +371,7 @@ namespace LiteDB.Engine
             this.ItemsCount--;
             this.UsedBytes -= length;
 
-            // clean segment area with \0
+            // clean segment area with \0 [[can be removed later for production]]
             _buffer.Array.Fill(0, _buffer.Offset + position, length);
 
             // check if deleted segment are at end of page
@@ -389,6 +402,7 @@ namespace LiteDB.Engine
             {
                 ENSURE(this.HighestIndex == byte.MaxValue, "if there is no items, HighestIndex must be clear");
                 ENSURE(_buffer.Slice(PAGE_HEADER_SIZE, PAGE_SIZE - PAGE_HEADER_SIZE - 1).All(0), "all content area must be 0");
+                ENSURE(this.UsedBytes == 0, "should be no bytes used in clean page");
 
                 this.NextFreePosition = PAGE_HEADER_SIZE;
                 this.FragmentedBytes = 0;
@@ -405,6 +419,7 @@ namespace LiteDB.Engine
         public BufferSlice Update(byte index, ushort bytesLength)
         {
             ENSURE(_buffer.ShareCounter == BUFFER_WRITABLE, "page must be writable to support changes");
+            ENSURE(bytesLength > 0, "must update more than 0 bytes");
 
             // read slot address
             var positionAddr = CalcPositionAddr(index);
@@ -415,7 +430,7 @@ namespace LiteDB.Engine
             var length = _buffer.ReadUInt16(lengthAddr);
 
             ENSURE(this.IsValidPos(position), "invalid segment position");
-            ENSURE(this.IsValidPos(length), "invalid segment length");
+            ENSURE(this.IsValidLen(length), "invalid segment length");
 
             // check if deleted segment are at end of page
             var isLastSegment = (position + length == this.NextFreePosition);
@@ -455,7 +470,7 @@ namespace LiteDB.Engine
 
                 return _buffer.Slice(position, bytesLength);
             }
-            // when new length are large than current segment must remove current item no add again
+            // when new length are large than current segment must remove current item and add again
             else
             {
                 // clear current segment
@@ -480,7 +495,7 @@ namespace LiteDB.Engine
                 _buffer.Write((ushort)0, lengthAddr);
 
                 // call insert
-                return this.Insert(bytesLength, index, true);
+                return this.Insert(bytesLength, index);
             }
         }
 
@@ -493,6 +508,8 @@ namespace LiteDB.Engine
             ENSURE(this.FragmentedBytes > 0, "do not call this when page has no fragmentation");
             ENSURE(_buffer.ShareCounter == BUFFER_WRITABLE, "page must be writable to support changes");
             ENSURE(this.HighestIndex < byte.MaxValue, "there is no items in this page to run defrag");
+
+            LOG($"defrag page #{this.PageID} (fragments: {this.FragmentedBytes})", "DISK");
 
             // first get all segments inside this page sorted by position (position, index)
             var segments = new SortedList<ushort, byte>();
@@ -552,7 +569,7 @@ namespace LiteDB.Engine
             // fill all non-used content area with 0
             var emptyLength = PAGE_SIZE - next - this.FooterSize;
 
-            _buffer.Array.Fill(0, next, emptyLength);
+            _buffer.Array.Fill(0, _buffer.Offset + next, emptyLength);
 
             // clear fragment blocks (page are in a continuous segment)
             this.FragmentedBytes = 0;
@@ -570,7 +587,7 @@ namespace LiteDB.Engine
         private byte GetFreeIndex()
         {
             // check for all slot area to get first empty slot [safe for byte loop]
-            for (byte index = _startIndex; index < byte.MaxValue; index++)
+            for (byte index = 0; index < byte.MaxValue; index++)
             {
                 var positionAddr = CalcPositionAddr(index);
                 var position = _buffer.ReadUInt16(positionAddr);
@@ -666,7 +683,7 @@ namespace LiteDB.Engine
         /// <summary>
         /// Get buffer offset position where one page segment length are located (based on index slot)
         /// </summary>
-        public static int CalcLengthAddr(byte index) => PAGE_SIZE - ((index + 1) * 4);
+        public static int CalcLengthAddr(byte index) => PAGE_SIZE - ((index + 1) * SLOT_SIZE);
 
         /// <summary>
         /// Returns a size of specified number of pages

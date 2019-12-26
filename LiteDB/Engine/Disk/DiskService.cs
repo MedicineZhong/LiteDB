@@ -53,6 +53,12 @@ namespace LiteDB.Engine
                 this.Initialize(_dataPool.Writer, settings.InitialSize);
             }
 
+            // if not readonly, force open writable datafile
+            if (settings.ReadOnly == false)
+            {
+                var dummy = _dataPool.Writer.CanRead;
+            }
+
             // get initial data file length
             _dataLength = _dataFactory.GetLength() - PAGE_SIZE;
 
@@ -93,7 +99,7 @@ namespace LiteDB.Engine
             // update buffer
             header.UpdateBuffer();
 
-            stream.Write(buffer.Array, 0, PAGE_SIZE);
+            stream.Write(buffer.Array, buffer.Offset, PAGE_SIZE);
 
             if (initialSize > 0)
             {
@@ -301,9 +307,6 @@ namespace LiteDB.Engine
             // dispose Stream pools
             _dataPool.Dispose();
             _logPool.Dispose();
-
-            ENSURE(_dataFactory.IsLocked() == false, "datafile must be released");
-            ENSURE(_dataFactory.IsLocked() == false, "logfile must be released");
 
             if (delete) _logFactory.Delete();
 

@@ -112,7 +112,7 @@ namespace LiteDB
             this.EnumAsInteger = false;
             this.ResolveFieldName = (s) => s;
             this.ResolveMember = (t, mi, mm) => { };
-            this.ResolveCollectionName = (t) => Reflection.IsList(t) ? Reflection.GetListItemType(t).Name : t.Name;
+            this.ResolveCollectionName = (t) => Reflection.IsEnumerable(t) ? Reflection.GetListItemType(t).Name : t.Name;
             this.IncludeFields = false;
 
             _typeInstantiator = customTypeInstantiator ?? ((Type t) => null);
@@ -282,7 +282,7 @@ namespace LiteDB
                     (memberInfo as FieldInfo).FieldType;
 
                 // check if datatype is list/array
-                var isList = Reflection.IsList(dataType);
+                var isEnumerable = Reflection.IsEnumerable(dataType);
 
                 // create a property mapper
                 var member = new MemberMapper
@@ -291,8 +291,8 @@ namespace LiteDB
                     FieldName = name,
                     MemberName = memberInfo.Name,
                     DataType = dataType,
-                    IsList = isList,
-                    UnderlyingType = isList ? Reflection.GetListItemType(dataType) : dataType,
+                    IsEnumerable = isEnumerable,
+                    UnderlyingType = isEnumerable ? Reflection.GetListItemType(dataType) : dataType,
                     Getter = getter,
                     Setter = setter
                 };
@@ -309,7 +309,7 @@ namespace LiteDB
                 this.ResolveMember?.Invoke(type, memberInfo, member);
 
                 // test if has name and there is no duplicate field
-                if (member.FieldName != null && mapper.Members.Any(x => x.FieldName.Equals(name, StringComparison.InvariantCultureIgnoreCase)) == false)
+                if (member.FieldName != null && mapper.Members.Any(x => x.FieldName.Equals(name, StringComparison.OrdinalIgnoreCase)) == false)
                 {
                     mapper.Members.Add(member);
                 }
@@ -324,7 +324,7 @@ namespace LiteDB
         protected virtual MemberInfo GetIdMember(IEnumerable<MemberInfo> members)
         {
             return Reflection.SelectMember(members,
-                x => Attribute.IsDefined(x, typeof(BsonIdAttribute), true),
+                x => x.IsDefined(typeof(BsonIdAttribute), true),
                 x => x.Name.Equals("Id", StringComparison.OrdinalIgnoreCase),
                 x => x.Name.Equals(x.DeclaringType.Name + "Id", StringComparison.OrdinalIgnoreCase));
         }
@@ -392,7 +392,7 @@ namespace LiteDB
             var newExpr = Expression.New(ctor, pars.ToArray());
 
             // get lambda expression
-            var fn = mapper.ForType.IsClass ? 
+            var fn = mapper.ForType.GetTypeInfo().IsClass ? 
                 Expression.Lambda<CreateObject>(newExpr, pDoc).Compile() : // Class
                 Expression.Lambda<CreateObject>(Expression.Convert(newExpr, typeof(object)), pDoc).Compile(); // Struct
 
@@ -410,7 +410,7 @@ namespace LiteDB
         {
             member.IsDbRef = true;
 
-            if (member.IsList)
+            if (member.IsEnumerable)
             {
                 RegisterDbRefList(mapper, member, typeNameBinder, collection);
             }

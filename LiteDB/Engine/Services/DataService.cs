@@ -8,7 +8,7 @@ namespace LiteDB.Engine
     internal class DataService
     {
         /// <summary>
-        /// Get maximum data bytes[] that fit in 1 page = 8149
+        /// Get maximum data bytes[] that fit in 1 page = 8150
         /// </summary>
         public const int MAX_DATA_BYTES_PER_PAGE =
             PAGE_SIZE - // 8192
@@ -96,7 +96,7 @@ namespace LiteDB.Engine
                         var dataPage = _snapshot.GetPage<DataPage>(updateAddress.PageID);
                         var currentBlock = dataPage.GetBlock(updateAddress.Index);
 
-                        // try get full page size content
+                        // try get full page size content (do not add DATA_BLOCK_FIXED_SIZE because will be added in UpdateBlock)
                         bytesToCopy = Math.Min(bytesLeft, dataPage.FreeBytes + currentBlock.Buffer.Count);
 
                         // get current free slot linked list
@@ -110,7 +110,7 @@ namespace LiteDB.Engine
 
                         lastBlock = updateBlock;
 
-                        // go to next address (if extits)
+                        // go to next address (if exists)
                         updateAddress = updateBlock.NextBlock;
                     }
                     else
@@ -135,7 +135,11 @@ namespace LiteDB.Engine
                 // old document was bigger than current, must delete extend blocks
                 if (lastBlock.NextBlock.IsEmpty == false)
                 {
-                    this.Delete(lastBlock.NextBlock);
+                    var nextBlockAddress = lastBlock.NextBlock;
+
+                    lastBlock.SetNextBlock(PageAddress.Empty);
+
+                    this.Delete(nextBlockAddress);
                 }
             }
 
