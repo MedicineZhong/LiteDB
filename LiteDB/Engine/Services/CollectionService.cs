@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -25,7 +25,7 @@ namespace LiteDB.Engine
         /// </summary>
         public static void CheckName(string name, HeaderPage header)
         {
-            if (Encoding.UTF8.GetByteCount(name) > header.GetAvaiableCollectionSpace()) throw LiteException.InvalidCollectionName(name, "There is no space in header this collection name");
+            if (Encoding.UTF8.GetByteCount(name) > header.GetAvailableCollectionSpace()) throw LiteException.InvalidCollectionName(name, "There is no space in header this collection name");
             if (!name.IsWord()) throw LiteException.InvalidCollectionName(name, "Use only [a-Z$_]");
             if (name.StartsWith("$")) throw LiteException.InvalidCollectionName(name, "Collection can't starts with `$` (reserved for system collections)");
         }
@@ -64,7 +64,7 @@ namespace LiteDB.Engine
             _transPages.Commit += (h) => h.InsertCollection(name, pageID);
 
             // create first index (_id pk) (must pass collectionPage because snapshot contains null in CollectionPage prop)
-            var indexer = new IndexService(_snapshot);
+            var indexer = new IndexService(_snapshot, _header.Pragmas.Collation);
 
             indexer.CreateIndex("_id", "$._id", true);
         }

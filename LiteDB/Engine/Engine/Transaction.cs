@@ -14,11 +14,11 @@ namespace LiteDB.Engine
         /// </summary>
         public bool BeginTrans()
         {
-            var transacion = _monitor.GetTransaction(true, out var isNew);
+            var transacion = _monitor.GetTransaction(true, false, out var isNew);
 
             transacion.ExplicitTransaction = true;
 
-            if (transacion.OpenCursors > 0) throw new LiteException(0, "This thread contains an open cursors/query. Close cursors before Begin()");
+            if (transacion.OpenCursors.Count > 0) throw new LiteException(0, "This thread contains an open cursors/query. Close cursors before Begin()");
 
             LOG(isNew, $"begin trans", "COMMAND");
 
@@ -30,19 +30,22 @@ namespace LiteDB.Engine
         /// </summary>
         public bool Commit()
         {
-            var transaction = _monitor.GetTransaction(false, out var isNew);
+            var transaction = _monitor.GetTransaction(false, false, out _);
 
             if (transaction != null)
             {
                 // do not accept explicit commit transaction when contains open cursors running
-                if (transaction.OpenCursors > 0) throw new LiteException(0, "This thread contains an open query/cursor. Close cursors before run Commit()");
+                if (transaction.OpenCursors.Count > 0) throw new LiteException(0, "Current transaction contains open cursors. Close cursors before run Commit()");
 
-                return transaction.Commit();
+                if (transaction.State == TransactionState.Active)
+                {
+                    this.CommitAndReleaseTransaction(transaction);
+
+                    return true;
+                }
             }
-            else
-            {
-                return false;
-            }
+
+            return false;
         }
 
         /// <summary>
@@ -50,16 +53,18 @@ namespace LiteDB.Engine
         /// </summary>
         public bool Rollback()
         {
-            var transaction = _monitor.GetTransaction(false, out var isNew);
+            var transaction = _monitor.GetTransaction(false, false, out _);
 
-            if (transaction != null)
+            if (transaction != null && transaction.State == TransactionState.Active)
             {
-                return transaction.Rollback();
+                transaction.Rollback();
+
+                _monitor.ReleaseTransaction(transaction);
+
+                return true;
             }
-            else
-            {
-                return false;
-            }
+
+            return false;
         }
 
         /// <summary>
@@ -67,17 +72,15 @@ namespace LiteDB.Engine
         /// </summary>
         private T AutoTransaction<T>(Func<TransactionService, T> fn)
         {
-            var transaction = _monitor.GetTransaction(true, out var isNew);
+            var transaction = _monitor.GetTransaction(true, false, out var isNew);
 
             try
             {
                 var result = fn(transaction);
 
                 // if this transaction was auto-created for this operation, commit & dispose now
-                if (isNew && transaction.OpenCursors == 0)
-                {
-                    transaction.Commit();
-                }
+                if (isNew)
+                    this.CommitAndReleaseTransaction(transaction);
 
                 return result;
             }
@@ -87,16 +90,18 @@ namespace LiteDB.Engine
 
                 transaction.Rollback();
 
+                _monitor.ReleaseTransaction(transaction);
+
                 throw;
             }
-            finally
-            {
-                // do auto-checkpoint if enabled (default: 1000 pages)
-                if (_settings.Checkpoint > 0 && _disk.GetLength(FileOrigin.Log) > (_settings.Checkpoint * PAGE_SIZE))
-                {
-                    _walIndex.Checkpoint(true);
-                }
-            }
+        }
+
+        private void CommitAndReleaseTransaction(TransactionService transaction)
+        {
+            transaction.Commit();
+            _monitor.ReleaseTransaction(transaction);
+            if (_header.Pragmas.Checkpoint > 0 && _disk.GetLength(FileOrigin.Log) > (_header.Pragmas.Checkpoint * PAGE_SIZE))
+                _walIndex.TryCheckpoint();
         }
     }
 }

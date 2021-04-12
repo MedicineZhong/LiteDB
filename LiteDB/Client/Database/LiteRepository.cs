@@ -10,16 +10,16 @@ namespace LiteDB
     /// <summary>
     /// The LiteDB repository pattern. A simple way to access your documents in a single class with fluent query api
     /// </summary>
-    public class LiteRepository : IDisposable
+    public class LiteRepository : ILiteRepository
     {
         #region Properties
 
-        private readonly LiteDatabase _db = null;
+        private readonly ILiteDatabase _db = null;
 
         /// <summary>
         /// Get database instance
         /// </summary>
-        public LiteDatabase Database { get { return _db; } }
+        public ILiteDatabase Database => _db;
 
         #endregion
 
@@ -28,7 +28,7 @@ namespace LiteDB
         /// <summary>
         /// Starts LiteDB database an existing Database instance
         /// </summary>
-        public LiteRepository(LiteDatabase database)
+        public LiteRepository(ILiteDatabase database)
         {
             _db = database;
         }
@@ -52,9 +52,9 @@ namespace LiteDB
         /// <summary>
         /// Starts LiteDB database using a Stream disk
         /// </summary>
-        public LiteRepository(Stream stream, BsonMapper mapper = null)
+        public LiteRepository(Stream stream, BsonMapper mapper = null, Stream logStream = null)
         {
-            _db = new LiteDatabase(stream, mapper);
+            _db = new LiteDatabase(stream, mapper, logStream);
         }
 
         #endregion
@@ -325,7 +325,21 @@ namespace LiteDB
 
         public void Dispose()
         {
-            _db.Dispose();
+            this.Dispose(true);
+            GC.SuppressFinalize(this);
+        }
+
+        ~LiteRepository()
+        {
+            this.Dispose(false);
+        }
+
+        protected virtual void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                _db.Dispose();
+            }
         }
     }
 }
